@@ -1,23 +1,31 @@
-const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const express = require('express');
+const cors = require('cors');
 const qrcode = require('qrcode');
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
-// Izinkan akses CORS agar bisa dipanggil dari pages.dev
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-    next();
-});
+const port = process.env.PORT || 3000;
 
 let qrCodeData = '';
 let isReady = false;
 
 const client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
+    puppeteer: {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ]
+    }
 });
 
 client.on('qr', (qr) => {
@@ -29,31 +37,41 @@ client.on('qr', (qr) => {
 client.on('ready', () => {
     isReady = true;
     qrCodeData = '';
-    console.log('WhatsApp Web Siap!');
+    console.log('WhatsApp Client Ready!');
+});
+
+client.on('authenticated', () => {
+    console.log('Authenticated successfully');
+});
+
+client.on('auth_failure', msg => {
+    console.error('AUTHENTICATION FAILURE', msg);
+});
+
+app.get('/status', (req, res) => {
+    res.json({ ready: isReady, qr: qrCodeData });
+});
+
+app.post('/send-message', async (req, res) => {
+    const { number, message } = req.body;
+    if (!isReady) {
+        return res.status(400).json({ status: 'error', message: 'WhatsApp belum tersambung (scan QR dulu)' });
+    }
+    try {
+        const formattedNumber = number.replace(/[^0-9]/g, '') + '@c.us';
+        await client.sendMessage(formattedNumber, message);
+        res.json({ status: 'success', message: 'Pesan berhasil dikirim!' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: error.toString() });
+    }
+});
+
+app.get('/', (req, res) => {
+    res.send('Backend WhatsApp Blast Aktif!');
 });
 
 client.initialize();
 
-// Endpoint untuk mendapatkan QR Code
-app.get('/qr', (req, res) => {
-    if (isReady) return res.json({ status: 'connected', message: 'WhatsApp Sudah Terhubung!' });
-    if (qrCodeData) return res.json({ status: 'qr', qr: qrCodeData });
-    res.json({ status: 'loading', message: 'Sedang memuat QR Code...' });
+app.listen(port, () => {
+    console.log(`Server berjalan di port ${port}`);
 });
-
-// Endpoint untuk mengirim pesan
-app.post('/send', async (req, res) => {
-    const { nomor, pesan } = req.body;
-    if (!isReady) return res.status(400).json({ error: 'WhatsApp belum terhubung!' });
-    
-    try {
-        const chatId = nomor.replace('+', '').replace(' ', '') + '@c.us';
-        await client.sendMessage(chatId, pesan);
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));
